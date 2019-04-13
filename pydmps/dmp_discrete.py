@@ -1,5 +1,6 @@
 '''
 Copyright (C) 2013 Travis DeWolf
+Modified in 2019 by Rodrigo da Silva Guerra and Lin Yu Ren
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -66,7 +67,10 @@ class DMPs_discrete(DMPs):
         x float: the current value of the canonical system
         dmp_num int: the index of the current dmp
         """
-        return x * (self.goal[dmp_num] - self.y0[dmp_num])
+        # Below we moved this term to the acceleration calculation
+        # expression, because for the non-mirroring version
+        # we had to have it separate from the cs x
+        return x # * (self.goal[dmp_num] - self.y0[dmp_num])
 
     def gen_goal(self, y_des):
         """Generate the goal for path imitation.
@@ -104,7 +108,7 @@ class DMPs_discrete(DMPs):
         self.w = np.zeros((self.n_dmps, self.n_bfs))
         for d in range(self.n_dmps):
             # spatial scaling term
-            k = (self.goal[d] - self.y0[d])
+            k = 1.0 # (self.goal[d] - self.y0[d]) # removed, for non-mirrored case.
             for b in range(self.n_bfs):
                 numer = np.sum(x_track * psi_track[:, b] * f_target[:, d])
                 denom = np.sum(x_track**2 * psi_track[:, b])

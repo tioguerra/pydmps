@@ -1,5 +1,6 @@
 '''
 Copyright (C) 2013 Travis DeWolf
+Modified in 2019 by Rodrigo da Silva Guerra and Lin Yu Ren
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -25,7 +26,7 @@ class DMPs(object):
 
     def __init__(self, n_dmps, n_bfs, dt=.01,
                  y0=0, goal=1, w=None,
-                 ay=None, by=None, **kwargs):
+                 ay=None, by=None, axis_to_not_mirror=None, **kwargs):
         """
         n_dmps int: number of dynamic motor primitives
         n_bfs int: number of basis functions per DMP
@@ -35,6 +36,11 @@ class DMPs(object):
         w list: tunable parameters, control amplitude of basis functions
         ay int: gain on attractor term y dynamics
         by int: gain on attractor term y dynamics
+        axis_to_not_mirror: an integer indicating the axis to
+                not mirror. This is typically the height, for robotics
+                applications. If we follow the usual convention for
+                cartesian axis order then 0 is x, 1 is y, 2 is z and
+                so on, so the height its usually 1 for 2D or 2 for 3D.
         """
 
         self.n_dmps = n_dmps
@@ -54,9 +60,19 @@ class DMPs(object):
         self.ay = np.ones(n_dmps) * 25. if ay is None else ay  # Schaal 2012
         self.by = self.ay / 4. if by is None else by  # Schaal 2012
 
+        # Here we set the flag for the axis that will not
+        # be flipped (we will apply a different scalling factor
+        # to this axis later)
+        self.axis_to_not_mirror = axis_to_not_mirror
+
         # set up the CS
         self.cs = CanonicalSystem(dt=self.dt, **kwargs)
         self.timesteps = int(self.cs.run_time / self.dt)
+
+        # We will need this for the special non-mirroring scale
+        # factor later
+        self.cs_rollout = self.cs.rollout()
+        self.cs.reset_state()
 
         # set up the DMP system
         self.reset_state()
@@ -121,9 +137,17 @@ class DMPs(object):
         f_target = np.zeros((y_des.shape[1], self.n_dmps))
         # find the force required to move along this trajectory
         for d in range(self.n_dmps):
-            f_target[:, d] = (ddy_des[d] - self.ay[d] *
-                              (self.by[d] * (self.goal[d] - y_des[d]) -
-                              dy_des[d]))
+
+            D = self.ay[d]     # These are some auxiliary variables
+            K = D * self.by[d] # added for clarity
+
+            if d is not self.axis_to_not_mirror:
+                f_target[:, d] = (ddy_des[d] - K * (self.goal[d] - y_des[d]) +
+                                  D*dy_des[d]) # original scalling
+            else: # else, non-mirroring scalling
+                f_target[:, d] = (ddy_des[d] + D*dy_des[d])/K \
+                                - (self.goal[d] - y_des[d]) \
+                                + (self.goal[d] - self.y0[d]) * self.cs_rollout
 
         # efficiently generate weights to realize f_target
         self.gen_weights(f_target)
@@ -201,9 +225,18 @@ class DMPs(object):
                  (np.dot(psi, self.w[d])) / np.sum(psi))
 
             # DMP acceleration
-            self.ddy[d] = (self.ay[d] *
-                           (self.by[d] * (self.goal[d] - self.y[d]) -
-                           self.dy[d]/tau) + f) * tau
+            D = self.ay[d]
+            K = D * self.by[d]
+            if d is not self.axis_to_not_mirror:
+                self.ddy[d] = (K * (self.goal[d] - self.y[d])
+                               - D * self.dy[d]/tau
+                               + f * (self.goal[d] - self.y0)) * tau
+            else:
+                self.ddy[d] = (K * (self.goal[d] - self.y[d]) \
+                               - D * self.dy[d]/tau \
+                               - K * (self.goal[d] - self.y0) * x \
+                               + K * f) * tau
+
             if external_force is not None:
                 self.ddy[d] += external_force[d]
             self.dy[d] += self.ddy[d] * tau * self.dt * error_coupling
