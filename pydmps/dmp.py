@@ -26,7 +26,8 @@ class DMPs(object):
 
     def __init__(self, n_dmps, n_bfs, dt=.01,
                  y0=0, goal=1, w=None,
-                 ay=None, by=None, axis_to_not_mirror=None, **kwargs):
+                 ay=None, by=None, axis_to_not_mirror=None,
+                 axis_not_to_scale=None, **kwargs):
         """
         n_dmps int: number of dynamic motor primitives
         n_bfs int: number of basis functions per DMP
@@ -41,6 +42,10 @@ class DMPs(object):
                 applications. If we follow the usual convention for
                 cartesian axis order then 0 is x, 1 is y, 2 is z and
                 so on, so the height its usually 1 for 2D or 2 for 3D.
+        axis_not_to_scale: an integer defining the axis for which
+                scale will not be implemented. This is to avoid
+                zero response when start and end positions are
+                exactly the same.
         """
 
         self.n_dmps = n_dmps
@@ -64,6 +69,9 @@ class DMPs(object):
         # be flipped (we will apply a different scalling factor
         # to this axis later)
         self.axis_to_not_mirror = axis_to_not_mirror
+
+        # This is the axis for which we will not compute scale
+        self.axis_not_to_scale = axis_not_to_scale
 
         # set up the CS
         self.cs = CanonicalSystem(dt=self.dt, **kwargs)
@@ -141,13 +149,16 @@ class DMPs(object):
             D = self.ay[d]     # These are some auxiliary variables
             K = D * self.by[d] # added for clarity
 
-            if d is not self.axis_to_not_mirror:
-                f_target[:, d] = (ddy_des[d] - K * (self.goal[d] - y_des[d]) +
-                                  D*dy_des[d]) # original scalling
-            else: # else, non-mirroring scalling
+            if d is self.axis_to_not_mirror: # non-mirroring scalling
                 f_target[:, d] = (ddy_des[d] + D*dy_des[d])/K \
                                 - (self.goal[d] - y_des[d]) \
                                 + (self.goal[d] - self.y0[d]) * self.cs_rollout
+            elif d is self.axis_not_to_scale: # without scale
+                f_target[:, d] = (ddy_des[d] - K * (self.goal[d] - y_des[d]) +
+                                  D*dy_des[d])
+            else: # original scalling
+                f_target[:, d] = (ddy_des[d] - K * (self.goal[d] - y_des[d]) +
+                                  D*dy_des[d])/(self.goal[d] - self.y0[d])
 
         # efficiently generate weights to realize f_target
         self.gen_weights(f_target)
@@ -227,15 +238,19 @@ class DMPs(object):
             # DMP acceleration
             D = self.ay[d]
             K = D * self.by[d]
-            if d is not self.axis_to_not_mirror:
-                self.ddy[d] = (K * (self.goal[d] - self.y[d])
-                               - D * self.dy[d]/tau
-                               + f * (self.goal[d] - self.y0)) * tau
-            else:
+            if d is self.axis_to_not_mirror:
                 self.ddy[d] = (K * (self.goal[d] - self.y[d]) \
                                - D * self.dy[d]/tau \
-                               - K * (self.goal[d] - self.y0) * x \
+                               - K * (self.goal[d] - self.y0[d]) * x \
                                + K * f) * tau
+            elif d is self.axis_not_to_scale:
+                self.ddy[d] = (K * (self.goal[d] - self.y[d])
+                               - D * self.dy[d]/tau
+                               + f) * tau
+            else:
+                self.ddy[d] = (K * (self.goal[d] - self.y[d])
+                               - D * self.dy[d]/tau
+                               + f * (self.goal[d] - self.y0[d])) * tau
 
             if external_force is not None:
                 self.ddy[d] += external_force[d]
